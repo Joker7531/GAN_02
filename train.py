@@ -3,10 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -26,6 +22,14 @@ def save_best_preview(
     out_path: Path,
 ) -> None:
     """Save a 3-sample visualization (raw input / clean target / model pred)."""
+    try:
+        import matplotlib  # type: ignore[import-not-found]
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt  # type: ignore[import-not-found]
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError("matplotlib is required for visualization. Install it via 'pip install matplotlib'.") from e
+
     model.eval()
     x = sample_x.to(device)
     y = sample_y.to(device)
@@ -59,14 +63,14 @@ def save_best_preview(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="EEG Wave-U-Net denoising (L1 + Multi-Res STFT)")
-    p.add_argument("--npz", type=str, default="dataset_cz_v2.npz")
+    p.add_argument("--npz", type=str, default="/root/autodl-tmp/dataset_cz_v2.npz")
     p.add_argument("--window", type=int, default=2048)
-    p.add_argument("--stride", type=int, default=2048)
+    p.add_argument("--stride", type=int, default=1024)
     p.add_argument("--train-ratio", type=float, default=0.9)
     p.add_argument("--seed", type=int, default=42)
 
-    p.add_argument("--batch", type=int, default=32)
-    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--batch", type=int, default=64)
+    p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--num-workers", type=int, default=0)
 
@@ -116,14 +120,14 @@ def main() -> None:
         data=data,
         indices=train_idx,
         window_size=args.window,
-        normalization="per_window_raw_zscore",
+        normalization="per_sample_zscore",
     )
     test_ds = EEGWindowDataset(
         npz_path=None,
         data=data,
         indices=test_idx,
         window_size=args.window,
-        normalization="per_window_raw_zscore",
+        normalization="per_sample_zscore",
     )
 
     train_loader = DataLoader(

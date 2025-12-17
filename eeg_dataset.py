@@ -64,8 +64,10 @@ class EEGWindowDataset(Dataset):
     Returns tensors shaped (1, window_size).
 
     Normalization options:
-    - per_window_raw_zscore: use raw window mean/std to z-score BOTH raw/clean.
-      This preserves relative scaling between raw and clean within each window.
+        - per_sample_zscore: z-score raw and clean independently per window.
+            (each sample/window uses its own mean/std)
+        - per_window_raw_zscore: use raw window mean/std to z-score BOTH raw/clean.
+            (keeps raw/clean on the same normalized scale)
     - none: no normalization.
     """
 
@@ -74,7 +76,7 @@ class EEGWindowDataset(Dataset):
         npz_path: str | None,
         indices: list[WindowIndex],
         window_size: int = 2048,
-        normalization: Literal["per_window_raw_zscore", "none"] = "per_window_raw_zscore",
+        normalization: Literal["per_sample_zscore", "per_window_raw_zscore", "none"] = "per_sample_zscore",
         eps: float = 1e-6,
         data: dict[str, np.ndarray] | None = None,
     ) -> None:
@@ -116,19 +118,26 @@ class EEGWindowDataset(Dataset):
         if raw.shape[0] != self.window_size or clean.shape[0] != self.window_size:
             raise IndexError("window out of range")
 
-        if self.normalization == "per_window_raw_zscore":
-            m = float(raw.mean())
-            s = float(raw.std())
-            s = s if s > self.eps else self.eps
-            raw = (raw - m) / s
-            clean = (clean - m) / s
+        x = torch.from_numpy(raw).unsqueeze(0)  # (1, T)
+        y = torch.from_numpy(clean).unsqueeze(0)
+
+        if self.normalization == "per_sample_zscore":
+            mx = x.mean(dim=-1, keepdim=True)
+            sx = x.std(dim=-1, keepdim=True, unbiased=False).clamp_min(self.eps)
+            my = y.mean(dim=-1, keepdim=True)
+            sy = y.std(dim=-1, keepdim=True, unbiased=False).clamp_min(self.eps)
+            x = (x - mx) / sx
+            y = (y - my) / sy
+        elif self.normalization == "per_window_raw_zscore":
+            mx = x.mean(dim=-1, keepdim=True)
+            sx = x.std(dim=-1, keepdim=True, unbiased=False).clamp_min(self.eps)
+            x = (x - mx) / sx
+            y = (y - mx) / sx
         elif self.normalization == "none":
             pass
         else:
             raise ValueError(f"Unknown normalization: {self.normalization}")
 
-        x = torch.from_numpy(raw).unsqueeze(0)  # (1, T)
-        y = torch.from_numpy(clean).unsqueeze(0)
         return x, y
 
 
