@@ -3,6 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -11,6 +15,46 @@ from tqdm import tqdm
 from eeg_dataset import EEGWindowDataset, make_window_index, split_indices
 from losses import HybridLossConfig, HybridTimeFreqLoss, MRSTFTConfig
 from models import WaveUNet1D, WaveUNetConfig
+
+
+@torch.no_grad()
+def save_best_preview(
+    model: torch.nn.Module,
+    sample_x: torch.Tensor,
+    sample_y: torch.Tensor,
+    device: str,
+    out_path: Path,
+) -> None:
+    """Save a 3-sample visualization (raw input / clean target / model pred)."""
+    model.eval()
+    x = sample_x.to(device)
+    y = sample_y.to(device)
+    y_hat = model(x)
+
+    x_np = x.detach().cpu().numpy()
+    y_np = y.detach().cpu().numpy()
+    yhat_np = y_hat.detach().cpu().numpy()
+
+    n = min(3, x_np.shape[0])
+    fig, axes = plt.subplots(n, 1, figsize=(12, 3.2 * n), sharex=True)
+    if n == 1:
+        axes = [axes]
+
+    t = np.arange(x_np.shape[-1])
+    for i in range(n):
+        ax = axes[i]
+        ax.plot(t, x_np[i, 0], label="raw(in)", linewidth=1.0)
+        ax.plot(t, y_np[i, 0], label="clean(gt)", linewidth=1.0)
+        ax.plot(t, yhat_np[i, 0], label="pred", linewidth=1.0)
+        ax.set_title(f"Sample {i}")
+        ax.grid(True, alpha=0.2)
+        if i == 0:
+            ax.legend(loc="upper right")
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +152,22 @@ def main() -> None:
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.9))
 
+    # Fixed 3 samples for visualization (deterministic under seed)
+    rng = np.random.default_rng(args.seed)
+    vis_n = min(3, len(test_ds))
+    vis_ids = rng.choice(len(test_ds), size=vis_n, replace=False) if vis_n > 0 else []
+    if vis_n > 0:
+        xs, ys = [], []
+        for i in vis_ids:
+            x_i, y_i = test_ds[int(i)]
+            xs.append(x_i)
+            ys.append(y_i)
+        vis_x = torch.stack(xs, dim=0)
+        vis_y = torch.stack(ys, dim=0)
+    else:
+        vis_x = None
+        vis_y = None
+
     best = float("inf")
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -139,6 +199,22 @@ def main() -> None:
         if val < best:
             best = val
             torch.save(ckpt, out_dir / "best.pt")
+            if vis_x is not None and vis_y is not None:
+                save_best_preview(
+                    model=model,
+                    sample_x=vis_x,
+                    sample_y=vis_y,
+                    device=args.device,
+                    out_path=out_dir / f"best_preview_epoch{epoch:03d}.png",
+                )
+                # Also keep a stable filename for the latest best
+                save_best_preview(
+                    model=model,
+                    sample_x=vis_x,
+                    sample_y=vis_y,
+                    device=args.device,
+                    out_path=out_dir / "best_preview.png",
+                )
 
 
 if __name__ == "__main__":
